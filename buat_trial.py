@@ -40,7 +40,6 @@ def main():
     respon_post = []
 
     with sync_playwright() as p:
-        # Matikan tanda otomatisasi agar tidak mudah dicurigai WAF/Cloudflare
         browser = p.chromium.launch(
             headless=True,
             args=["--disable-blink-features=AutomationControlled"],
@@ -56,17 +55,17 @@ def main():
         context.add_cookies(cookies)
         page = context.new_page()
 
-        # Rekam respon POST dari server untuk melihat isi detail error 403
         def tangkap_respon(res):
             if res.request.method == "POST":
                 try:
-                    isi = res.text()[:800]
+                    isi = res.text()[:1000]
                 except Exception as e:
                     isi = f"Gagal baca body: {e}"
                 respon_post.append(
                     {
                         "url": res.url,
                         "status": res.status,
+                        "content_type": res.headers.get("content-type", "-"),
                         "server": res.headers.get("server", "-"),
                         "cf_mitigated": res.headers.get("cf-mitigated", "-"),
                         "body": isi,
@@ -75,54 +74,59 @@ def main():
 
         page.on("response", tangkap_respon)
 
-        print("Membuka halaman ID3 VVIP...")
-        page.goto(URL, wait_until="networkidle", timeout=60000)
+        try:
+            print("Membuka halaman ID3 VVIP...", flush=True)
+            res_awal = page.goto(URL, wait_until="domcontentloaded", timeout=45000)
+            print(f"Status buka halaman: {res_awal.status if res_awal else '-'}", flush=True)
+            print(f"URL sekarang: {page.url}", flush=True)
 
-        if "login" in page.url.lower():
-            page.screenshot(path="hasil_error_login.png", full_page=True)
+            # Tunggu kolom username muncul (maksimal 20 detik)
+            input_user = page.locator('input[placeholder*="username" i]').first
+            input_user.wait_for(state="visible", timeout=20000)
+
+            # 1. Isi username & password
+            input_user.fill(USERNAME)
+            page.wait_for_timeout(400)
+            page.locator('input[placeholder*="password" i]').first.fill(PASSWORD)
+            page.wait_for_timeout(400)
+
+            # 2. Klik pilihan durasi "Trial"
+            page.get_by_text("Trial", exact=True).first.click()
+            page.wait_for_timeout(800)
+
+            # 3. Centang kotak Terms of Service (TOS)
+            checkbox = page.locator('input[type="checkbox"]').first
+            if checkbox.count() > 0:
+                checkbox.check(force=True)
+            else:
+                page.get_by_text("Terms of Service", exact=False).first.click()
+
+            page.wait_for_timeout(800)
+            page.screenshot(path="1_sebelum_submit.png", full_page=True)
+
+            # 4. Klik tombol Create Account Now
+            tombol = page.locator('button:has-text("Create Account Now")').first
+            tombol.scroll_into_view_if_needed()
+            tombol.click()
+
+            # Tunggu 6 detik agar respon POST selesai
+            page.wait_for_timeout(6000)
+            page.screenshot(path="2_sesudah_submit.png", full_page=True)
+
+        except Exception as e:
+            print(f"TERJADI ERROR: {e}", flush=True)
+            page.screenshot(path="error_halaman.png", full_page=True)
+            raise
+        finally:
+            print("=== DETAIL RESPON POST ===", flush=True)
+            print(json.dumps(respon_post, indent=2), flush=True)
+            print("=== RINGKASAN HALAMAN ===", flush=True)
+            try:
+                print(page.inner_text("body")[:1500], flush=True)
+            except Exception:
+                pass
             browser.close()
-            raise SystemExit("GAGAL: Sesi cookie kedaluwarsa, diarahkan ke login.")
-
-        page.wait_for_timeout(1500)
-
-        # 1. Isi username & password tetap: tid7777
-        page.locator('input[placeholder*="username" i]').first.fill(USERNAME)
-        page.wait_for_timeout(400)
-        page.locator('input[placeholder*="password" i]').first.fill(PASSWORD)
-        page.wait_for_timeout(400)
-
-        # 2. Klik pilihan durasi "Trial"
-        page.get_by_text("Trial", exact=True).first.click()
-        page.wait_for_timeout(800)
-
-        # 3. Centang kotak Terms of Service (TOS)
-        checkbox = page.locator('input[type="checkbox"]').first
-        if checkbox.count() > 0:
-            checkbox.check(force=True)
-        else:
-            page.get_by_text("Terms of Service", exact=False).first.click()
-
-        page.wait_for_timeout(800)
-        page.screenshot(path="1_sebelum_submit.png", full_page=True)
-
-        # 4. Klik tombol Create Account Now
-        tombol = page.locator('button:has-text("Create Account Now")').first
-        tombol.scroll_into_view_if_needed()
-        tombol.click()
-
-        page.wait_for_timeout(5000)
-        page.wait_for_load_state("networkidle")
-        page.screenshot(path="2_sesudah_submit.png", full_page=True)
-
-        print("=== DETAIL RESPON POST ===")
-        for r in respon_post:
-            print(json.dumps(r, indent=2))
-
-        print("=== RINGKASAN HALAMAN ===")
-        print(page.inner_text("body")[:1500])
-
-        browser.close()
-        print("Selesai dijalankan.")
+            print("Selesai dijalankan.", flush=True)
 
 
 if __name__ == "__main__":
