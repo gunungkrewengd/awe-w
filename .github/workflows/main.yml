@@ -1,0 +1,37 @@
+name: Auto Create SSH Trial ID3
+
+on:
+  schedule:
+    - cron: '1 17 * * *' # 17:01 UTC = 00:01 WIB setiap hari
+  workflow_dispatch:      # Tombol tes manual kapan saja
+
+jobs:
+  buat-akun:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ambil kode repositori
+        uses: actions/checkout@v4
+
+      - name: Siapkan Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instal Playwright & Chromium
+        run: |
+          pip install playwright
+          playwright install chromium
+          playwright install-deps chromium
+
+      - name: Jalankan skrip buat trial
+        env:
+          COOKIES_JSON: ${{ secrets.COOKIES_JSON }}
+        run: python buat_trial.py
+
+      - name: Simpan screenshot hasil
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hasil-screenshot
+          path: "*.png"
+          retention-days: 3
