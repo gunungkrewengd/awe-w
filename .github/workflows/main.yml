@@ -3,7 +3,7 @@ name: Auto Create SSH Trial ID3
 on:
   schedule:
     - cron: '1 17 * * *' # 17:01 UTC = 00:01 WIB setiap hari
-  workflow_dispatch:      # Tombol tes manual kapan saja
+  workflow_dispatch:
 
 jobs:
   buat-akun:
@@ -17,16 +17,16 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Instal Playwright & Chromium
+      - name: Instal Patchright & Chromium
         run: |
-          pip install playwright
-          playwright install chromium
-          playwright install-deps chromium
+          pip install patchright
+          patchright install chromium
+          patchright install-deps chromium
 
       - name: Jalankan skrip buat trial
         env:
           COOKIES_JSON: ${{ secrets.COOKIES_JSON }}
-        run: python buat_trial.py
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24" python buat_trial.py
 
       - name: Simpan screenshot hasil
         if: always()
