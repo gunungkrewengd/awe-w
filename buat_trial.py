@@ -8,7 +8,6 @@ PASSWORD = "tid7777"
 
 
 def konversi_cookies(raw_json):
-    """Mengubah format Cookie-Editor agar cocok dengan Playwright."""
     samesite_map = {
         "lax": "Lax",
         "strict": "Strict",
@@ -38,19 +37,43 @@ def main():
         raise SystemExit("ERROR: Secret COOKIES_JSON belum diisi.")
 
     cookies = konversi_cookies(cookies_env)
+    respon_post = []
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        # Matikan tanda otomatisasi agar tidak mudah dicurigai WAF/Cloudflare
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--disable-blink-features=AutomationControlled"],
+        )
         context = browser.new_context(
-            viewport={"width": 412, "height": 915},
-            user_agent=(
-                "Mozilla/5.0 (Linux; Android 13; Mobile) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Mobile Safari/537.36"
-            ),
+            viewport={"width": 1280, "height": 800},
+            locale="id-ID",
+            timezone_id="Asia/Jakarta",
+        )
+        context.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
         )
         context.add_cookies(cookies)
         page = context.new_page()
+
+        # Rekam respon POST dari server untuk melihat isi detail error 403
+        def tangkap_respon(res):
+            if res.request.method == "POST":
+                try:
+                    isi = res.text()[:800]
+                except Exception as e:
+                    isi = f"Gagal baca body: {e}"
+                respon_post.append(
+                    {
+                        "url": res.url,
+                        "status": res.status,
+                        "server": res.headers.get("server", "-"),
+                        "cf_mitigated": res.headers.get("cf-mitigated", "-"),
+                        "body": isi,
+                    }
+                )
+
+        page.on("response", tangkap_respon)
 
         print("Membuka halaman ID3 VVIP...")
         page.goto(URL, wait_until="networkidle", timeout=60000)
@@ -58,11 +81,15 @@ def main():
         if "login" in page.url.lower():
             page.screenshot(path="hasil_error_login.png", full_page=True)
             browser.close()
-            raise SystemExit("GAGAL: Sesi cookie kedaluwarsa, diarahkan ke halaman login.")
+            raise SystemExit("GAGAL: Sesi cookie kedaluwarsa, diarahkan ke login.")
+
+        page.wait_for_timeout(1500)
 
         # 1. Isi username & password tetap: tid7777
         page.locator('input[placeholder*="username" i]').first.fill(USERNAME)
+        page.wait_for_timeout(400)
         page.locator('input[placeholder*="password" i]').first.fill(PASSWORD)
+        page.wait_for_timeout(400)
 
         # 2. Klik pilihan durasi "Trial"
         page.get_by_text("Trial", exact=True).first.click()
@@ -75,7 +102,7 @@ def main():
         else:
             page.get_by_text("Terms of Service", exact=False).first.click()
 
-        page.wait_for_timeout(500)
+        page.wait_for_timeout(800)
         page.screenshot(path="1_sebelum_submit.png", full_page=True)
 
         # 4. Klik tombol Create Account Now
@@ -83,15 +110,16 @@ def main():
         tombol.scroll_into_view_if_needed()
         tombol.click()
 
-        # Tunggu respon server selesai diproses
         page.wait_for_timeout(5000)
         page.wait_for_load_state("networkidle")
         page.screenshot(path="2_sesudah_submit.png", full_page=True)
 
-        # Tampilkan cuplikan teks halaman di log agar mudah dibaca
-        teks_halaman = page.inner_text("body")
-        print("=== HASIL HALAMAN ===")
-        print(teks_halaman[:1500])
+        print("=== DETAIL RESPON POST ===")
+        for r in respon_post:
+            print(json.dumps(r, indent=2))
+
+        print("=== RINGKASAN HALAMAN ===")
+        print(page.inner_text("body")[:1500])
 
         browser.close()
         print("Selesai dijalankan.")
