@@ -1,8 +1,6 @@
 name: Auto Create SSH Trial ID3
 
 on:
-  schedule:
-    - cron: '1 17 * * *' # 17:01 UTC = 00:01 WIB setiap hari
   workflow_dispatch:
 
 jobs:
