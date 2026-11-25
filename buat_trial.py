@@ -1,6 +1,6 @@
 import json
 import os
-from playwright.sync_api import sync_playwright
+from patchright.sync_api import sync_playwright
 
 URL = "https://panel.jagoanssh.com/account/create/19?protocol=ssh"
 USERNAME = "tid7777"
@@ -16,6 +16,9 @@ def konversi_cookies(raw_json):
     }
     hasil = []
     for c in json.loads(raw_json):
+        # Lewati XSRF-TOKEN lama agar server membuat token baru yang segar
+        if c["name"].upper() == "XSRF-TOKEN":
+            continue
         item = {
             "name": c["name"],
             "value": c["value"],
@@ -37,37 +40,30 @@ def main():
         raise SystemExit("ERROR: Secret COOKIES_JSON belum diisi.")
 
     cookies = konversi_cookies(cookies_env)
-    respon_post = []
+    respon_panel = []
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=["--disable-blink-features=AutomationControlled"],
-        )
+        # Mode non-headless (tampil di layar virtual xvfb) agar lolos Cloudflare
+        browser = p.chromium.launch(headless=False)
         context = browser.new_context(
             viewport={"width": 1280, "height": 800},
             locale="id-ID",
             timezone_id="Asia/Jakarta",
         )
-        context.add_init_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
-        )
         context.add_cookies(cookies)
         page = context.new_page()
 
         def tangkap_respon(res):
-            if res.request.method == "POST":
+            if res.request.method == "POST" and "/cdn-cgi/" not in res.url:
                 try:
                     isi = res.text()[:1000]
                 except Exception as e:
                     isi = f"Gagal baca body: {e}"
-                respon_post.append(
+                respon_panel.append(
                     {
                         "url": res.url,
                         "status": res.status,
                         "content_type": res.headers.get("content-type", "-"),
-                        "server": res.headers.get("server", "-"),
-                        "cf_mitigated": res.headers.get("cf-mitigated", "-"),
                         "body": isi,
                     }
                 )
@@ -77,22 +73,23 @@ def main():
         try:
             print("Membuka halaman ID3 VVIP...", flush=True)
             res_awal = page.goto(URL, wait_until="domcontentloaded", timeout=45000)
-            print(f"Status buka halaman: {res_awal.status if res_awal else '-'}", flush=True)
-            print(f"URL sekarang: {page.url}", flush=True)
+            print(f"Status awal: {res_awal.status if res_awal else '-'}", flush=True)
 
-            # Tunggu kolom username muncul (maksimal 20 detik)
+            # Tunggu hingga 25 detik jika Cloudflare sedang memproses verifikasi otomatis
             input_user = page.locator('input[placeholder*="username" i]').first
-            input_user.wait_for(state="visible", timeout=20000)
+            input_user.wait_for(state="visible", timeout=25000)
+            print("Berhasil masuk ke halaman form!", flush=True)
 
             # 1. Isi username & password
+            page.wait_for_timeout(800)
             input_user.fill(USERNAME)
-            page.wait_for_timeout(400)
+            page.wait_for_timeout(500)
             page.locator('input[placeholder*="password" i]').first.fill(PASSWORD)
-            page.wait_for_timeout(400)
+            page.wait_for_timeout(500)
 
             # 2. Klik pilihan durasi "Trial"
             page.get_by_text("Trial", exact=True).first.click()
-            page.wait_for_timeout(800)
+            page.wait_for_timeout(1000)
 
             # 3. Centang kotak Terms of Service (TOS)
             checkbox = page.locator('input[type="checkbox"]').first
@@ -109,8 +106,8 @@ def main():
             tombol.scroll_into_view_if_needed()
             tombol.click()
 
-            # Tunggu 6 detik agar respon POST selesai
-            page.wait_for_timeout(6000)
+            # Tunggu proses pembuatan akun selesai
+            page.wait_for_timeout(8000)
             page.screenshot(path="2_sesudah_submit.png", full_page=True)
 
         except Exception as e:
@@ -118,8 +115,8 @@ def main():
             page.screenshot(path="error_halaman.png", full_page=True)
             raise
         finally:
-            print("=== DETAIL RESPON POST ===", flush=True)
-            print(json.dumps(respon_post, indent=2), flush=True)
+            print("=== DETAIL RESPON POST PANEL ===", flush=True)
+            print(json.dumps(respon_panel, indent=2), flush=True)
             print("=== RINGKASAN HALAMAN ===", flush=True)
             try:
                 print(page.inner_text("body")[:1500], flush=True)
